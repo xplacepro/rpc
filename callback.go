@@ -29,7 +29,7 @@ func (req *CallbackRequest) Prepare() {
 	}
 }
 
-func DoCallbackRequest(url string, request CallbackRequest, ClientUser string, ClientPassword string) (string, error) {
+func DoCallbackRequest(url string, request CallbackRequest, clientAuth ClientAuthorization) (string, error) {
 	request.Prepare()
 	body, enc_err := json.Marshal(request)
 	if enc_err != nil {
@@ -38,7 +38,8 @@ func DoCallbackRequest(url string, request CallbackRequest, ClientUser string, C
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(ClientUser, ClientPassword)
+
+	clientAuth.Authorize(req)
 
 	client := &http.Client{}
 	log.Printf("DoCallbackRequest to %s, %v", url, request)
