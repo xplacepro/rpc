@@ -1,108 +1,105 @@
 package rpc
 
 import (
-	"encoding/json"
-	"errors"
 	"log"
 	"net/http"
 )
 
-type Error interface {
-	error
-	GetErrorResponse(int) map[string]interface{}
-}
-
-type StatusError struct {
-	Err         error
-	MetadataMap map[string]interface{}
-}
-
-// Allows StatusError to satisfy the error interface.
-func (se StatusError) Error() string {
-	return se.Err.Error()
-}
-
-// Allows StatusError to satisfy the error interface.
-func (se StatusError) GetErrorResponse(status int) map[string]interface{} {
-	md := se.MetadataMap
-	if md == nil {
-		md = map[string]interface{}{}
-	}
-	return map[string]interface{}{"type": "error", "error_code": status, "error": se.Error(), "metadata": md}
-}
-
 type Response interface {
-	GetResponse() map[string]interface{}
+	Render(w http.ResponseWriter) error
 }
 
-type SyncResponse struct {
-	Status     string
-	StatusCode int
-	Metadata   map[string]interface{}
+type errorResponse struct {
+	code int
+	msg  string
 }
 
-func (s SyncResponse) GetResponse() map[string]interface{} {
-	return map[string]interface{}{"type": "sync", "status": s.Status, "status_code": s.StatusCode, "metadata": s.Metadata}
+func (err *errorResponse) Render(w http.ResponseWriter) error {
+	w.WriteHeader(err.code)
+	body := map[string]interface{}{"type": "error", "code": err.code, "error": err.msg}
+	return WriteJson(w, body)
 }
 
-type AsyncResponse struct {
-	Status     string
-	StatusCode int
-	Metadata   map[string]interface{}
+var NotFound = &errorResponse{http.StatusNotFound, "not found"}
+var Unauthorized = &errorResponse{http.StatusUnauthorized, "unauthorized"}
+
+func BadRequest(err error) Response {
+	return &errorResponse{http.StatusBadRequest, err.Error()}
 }
 
-func (s AsyncResponse) GetResponse() map[string]interface{} {
-	return map[string]interface{}{"type": "async", "status": s.Status, "status_code": s.StatusCode, "metadata": s.Metadata}
+func InternalError(err error) Response {
+	return &errorResponse{http.StatusInternalServerError, err.Error()}
+}
+
+type syncResponse struct {
+	Metadata interface{}
+}
+
+var EmptySyncResponse = &syncResponse{}
+
+func (s *syncResponse) Render(w http.ResponseWriter) error {
+	w.WriteHeader(http.StatusOK)
+	body := map[string]interface{}{"type": "sync", "code": http.StatusOK, "metadata": s.Metadata}
+	return WriteJson(w, body)
+}
+
+func SyncResponse(metadata interface{}) Response {
+	return &syncResponse{metadata}
+}
+
+type asyncResponse struct {
+	Metadata  interface{}
+	Operation string
+}
+
+func (s *asyncResponse) Render(w http.ResponseWriter) error {
+	w.WriteHeader(http.StatusOK)
+	body := map[string]interface{}{"type": "async", "code": http.StatusOK, "metadata": s.Metadata, "operation": s.Operation}
+	return WriteJson(w, body)
+}
+
+func AsyncResponse(metadata interface{}, operation string) Response {
+	return &asyncResponse{metadata, operation}
 }
 
 // A (simple) example of our application-wide configuration.
 type Env struct {
 	Auth       Authorization
 	ClientAuth ClientAuthorization
+	Config     map[string]string
 }
 
 // The Handler struct that takes a configured Env and a function matching
 // our useful signature.
 type Handler struct {
 	*Env
-	H func(e *Env, w http.ResponseWriter, r *http.Request) (Response, int, error)
+	H func(e *Env, w http.ResponseWriter, r *http.Request) Response
 }
 
 // ServeHTTP allows our Handler type to satisfy http.Handler.
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Got request %s %s", r.Method, r.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
-	encoder := json.NewEncoder(w)
 
 	if h.Env.Auth != nil {
 		authorized := h.Env.Auth.Authorize(r)
 		if !authorized {
-			status := http.StatusUnauthorized
-			w.WriteHeader(status)
-			encoder.Encode(StatusError{Err: errors.New("Unauthorized")}.GetErrorResponse(status))
+			Unauthorized.Render(w)
 			return
 		}
 	}
 
-	response, status, err := h.H(h.Env, w, r)
+	response := h.H(h.Env, w, r)
 
-	w.WriteHeader(status)
-
-	if err != nil {
-		switch e := err.(type) {
-		case Error:
-			error_response := e.GetErrorResponse(status)
-			log.Printf("HTTP %d - %s, %v", status, e, error_response)
-			encoder.Encode(error_response)
-		default:
-			// Any error types we don't specifically look out for default
-			// to serving a HTTP 500
-			http.Error(w, http.StatusText(http.StatusInternalServerError),
-				http.StatusInternalServerError)
-		}
-	} else {
-		response_content := response.GetResponse()
-		log.Println("HTTP %d - %s", status, response_content)
-		encoder.Encode(response_content)
+	switch e := response.(type) {
+	case Response:
+		log.Printf("Response: %v", e)
+		response.Render(w)
+	default:
+		log.Printf("Internal error: %v", e)
+		// Any error types we don't specifically look out for default
+		// to serving a HTTP 500
+		http.Error(w, http.StatusText(http.StatusInternalServerError),
+			http.StatusInternalServerError)
 	}
 }
