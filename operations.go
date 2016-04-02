@@ -95,7 +95,9 @@ func GetOperationHandler(env *Env, w http.ResponseWriter, r *http.Request) Respo
 
 	op, ok := OperationGet(id)
 	if !ok {
-		return NotFound
+		op = &Operation{}
+		op.status = 404
+		op.id = id
 	}
 
 	if op.status == 200 {
