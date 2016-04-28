@@ -67,6 +67,7 @@ type Env struct {
 	Auth       Authorization
 	ClientAuth ClientAuthorization
 	Config     map[string]string
+	Debug      bool
 }
 
 // The Handler struct that takes a configured Env and a function matching
@@ -78,7 +79,9 @@ type Handler struct {
 
 // ServeHTTP allows our Handler type to satisfy http.Handler.
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Got request %s %s", r.Method, r.URL.Path)
+	if h.Env.Debug {
+		log.Printf("Got request %s %s", r.Method, r.URL.Path)
+	}
 	w.Header().Set("Content-Type", "application/json")
 
 	if h.Env.Auth != nil {
@@ -93,10 +96,15 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch e := response.(type) {
 	case Response:
-		log.Printf("Response: %v", e)
+		if h.Env.Debug {
+			log.Printf("Response: %v", e)
+		}
 		response.Render(w)
 	default:
-		log.Printf("Internal error: %v", e)
+		if h.Env.Debug {
+			log.Printf("Internal error: %v", e)
+		}
+
 		// Any error types we don't specifically look out for default
 		// to serving a HTTP 500
 		http.Error(w, http.StatusText(http.StatusInternalServerError),
